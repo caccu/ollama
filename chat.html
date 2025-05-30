@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <title>Chatbot Ollama Web</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: #111;
+            color: #fff;
+        }
+        #chatbox {
+            width: 600px;
+            margin: 40px auto;
+            background: #fff;
+            border-radius: 14px;
+            box-shadow: 0 4px 24px #0008;
+            padding: 0 0 24px 0;
+            border: 2px solid #ffd600;
+            position: relative;
+        }
+        #messages {
+            height: 380px;
+            overflow-y: auto;
+            border: 1px solid #ffd600;
+            padding: 18px;
+            background: #222;
+            margin: 24px 24px 16px 24px;
+            border-radius: 8px;
+        }
+        .msg {
+            margin: 12px 0;
+            white-space: pre-wrap;
+        }
+        .user {
+            color: #ffd600;
+            background: #222;
+            padding: 8px 12px;
+            border-radius: 8px 8px 8px 0;
+            align-self: flex-end;
+            max-width: 90%;
+        }
+        .bot {
+            color: #111;
+            background: #ffd600;
+            padding: 8px 12px;
+            border-radius: 8px 8px 0 8px;
+            align-self: flex-start;
+            max-width: 90%;
+        }
+        #inputArea {
+            display: flex;
+            margin: 0 24px 0 24px;
+            gap: 10px;
+        }
+        #userInput {
+            flex: 1;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid #ffd600;
+            font-size: 1em;
+            background: #fff;
+            color: #111;
+        }
+        .actionBtn {
+            padding: 12px 22px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        #sendBtn {
+            background: #ffd600;
+            color: #111;
+        }
+        #sendBtn:hover {
+            background: #ffe066;
+        }
+        #clearBtn {
+            background: #111;
+            color: #ffd600;
+            border: 1px solid #ffd600;
+        }
+        #clearBtn:hover {
+            background: #ffd600;
+            color: #111;
+        }
+        #uploadForm {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 10px;
+            margin: 18px 24px 0 24px;
+        }
+        #fileInput {
+            flex: 1;
+            background: #fff;
+            color: #111;
+            border-radius: 6px;
+            border: 1px solid #ffd600;
+            padding: 8px;
+        }
+        .typing {
+            color: #888;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+<h1 style="text-align:center;color:#ffd600;font-size:2.2em;margin-top:32px;margin-bottom:10px;letter-spacing:1px;">ENI Virtual Assistant</h1>
+<!-- Logo ENI rimosso temporaneamente per problemi di visualizzazione -->
+<div id="chatbox">
+    <div id="messages"></div>
+    <div id="inputArea">
+        <input type="text" id="userInput" placeholder="Scrivi un messaggio..." autofocus />
+        <button id="sendBtn" class="actionBtn">Invia</button>
+        <button id="clearBtn" class="actionBtn">Pulisci</button>
+    </div>
+    <form id="uploadForm" enctype="multipart/form-data">
+        <input type="file" id="fileInput" name="file" accept=".xlsx,.xls,.csv,.doc,.docx,.pdf,.ppt,.pptx" />
+        <button type="submit" class="actionBtn">Invia</button>
+    </form>
+</div>
+<script>
+const messagesDiv = document.getElementById('messages');
+const userInput = document.getElementById('userInput');
+const sendBtn = document.getElementById('sendBtn');
+const clearBtn = document.getElementById('clearBtn');
+const uploadForm = document.getElementById('uploadForm');
+const fileInput = document.getElementById('fileInput');
+
+let canSend = true;
+let currentEvtSource = null;
+let canUpload = true;
+
+function appendMessage(text, sender, id) {
+    const msg = document.createElement('div');
+    msg.className = 'msg ' + sender;
+    if (id) msg.id = id;
+    msg.innerHTML = (sender === 'user' ? '<b>Tu:</b> ' : '<b>Bot:</b> ') + text;
+    messagesDiv.appendChild(msg);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    return msg;
+}
+
+function sendMessage() {
+    if (!canSend) return;
+    const text = userInput.value.trim();
+    if (!text) return;
+    appendMessage(text, 'user');
+    userInput.value = '';
+    canSend = false;
+    userInput.disabled = true;
+    sendBtn.disabled = true;
+    // Disabilita anche upload mentre il bot risponde
+    canUpload = false;
+    fileInput.disabled = true;
+    uploadForm.querySelector('button[type="submit"]').disabled = true;
+    const botMsg = appendMessage('<span class="typing">Bot sta scrivendo...</span>', 'bot', 'bot-typing');
+    currentEvtSource = new EventSourcePolyfill('http://localhost:5050/chat', {
+        headers: { 'Content-Type': 'application/json' },
+        payload: JSON.stringify({ message: text }),
+        method: 'POST'
+    });
+    let fullText = '';
+    let errorHandled = false;
+    currentEvtSource.onmessage = function(event) {
+        try {
+            const data = JSON.parse(event.data);
+            if (data.response) {
+                fullText += data.response;
+                botMsg.innerHTML = '<b>Bot:</b> ' + fullText.replace(/\n/g, '<br>');
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+                // Se la risposta contiene "errore" o "miglioreremo il prodotto", resetta la chat
+                if (/errore|miglioreremo il prodotto/i.test(data.response) && !errorHandled) {
+                    errorHandled = true;
+                    setTimeout(() => {
+                        messagesDiv.innerHTML = '';
+                        appendMessage('La chat è stata riavviata. Puoi riprovare!', 'bot');
+                        canSend = true;
+                        userInput.disabled = false;
+                        sendBtn.disabled = false;
+                        canUpload = true;
+                        fileInput.disabled = false;
+                        uploadForm.querySelector('button[type="submit"]').disabled = false;
+                    }, 2000);
+                }
+            }
+        } catch {}
+    };
+    currentEvtSource.onerror = function() {
+        if (!errorHandled) {
+            botMsg.innerHTML = '<b>Bot:</b> Si è verificato un errore di connessione. Riprova! Miglioreremo il prodotto.';
+            setTimeout(() => {
+                messagesDiv.innerHTML = '';
+                appendMessage('La chat è stata riavviata. Puoi riprovare!', 'bot');
+                canSend = true;
+                userInput.disabled = false;
+                sendBtn.disabled = false;
+                canUpload = true;
+                fileInput.disabled = false;
+                uploadForm.querySelector('button[type="submit"]').disabled = false;
+            }, 2000);
+        }
+        currentEvtSource = null;
+    };
+    // Riabilita l'invio solo quando la risposta è terminata
+    currentEvtSource.onmessageend = function() {
+        canSend = true;
+        userInput.disabled = false;
+        sendBtn.disabled = false;
+        canUpload = true;
+        fileInput.disabled = false;
+        uploadForm.querySelector('button[type="submit"]').disabled = false;
+        currentEvtSource = null;
+    };
+    // Fallback: riabilita comunque dopo 2.5s se non gestito
+    setTimeout(() => {
+        canSend = true;
+        userInput.disabled = false;
+        sendBtn.disabled = false;
+        canUpload = true;
+        fileInput.disabled = false;
+        uploadForm.querySelector('button[type="submit"]').disabled = false;
+        currentEvtSource = null;
+    }, 2500);
+}
+
+sendBtn.onclick = sendMessage;
+userInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') sendMessage();
+});
+
+uploadForm.onsubmit = function(e) {
+    e.preventDefault();
+    if (!canUpload) return;
+    const file = fileInput.files[0];
+    if (!file) return;
+    appendMessage('Hai allegato: ' + file.name, 'user');
+    const formData = new FormData();
+    formData.append('file', file);
+    canUpload = false;
+    fileInput.disabled = true;
+    uploadForm.querySelector('button[type="submit"]').disabled = true;
+    const botMsg = appendMessage('<span class="typing">Bot sta elaborando l\'allegato...</span>', 'bot', 'bot-typing');
+    fetch('http://localhost:5050/upload', {
+        method: 'POST',
+        body: formData
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.response) {
+            botMsg.innerHTML = '<b>Bot:</b> ' + data.response.replace(/\n/g, '<br>');
+        } else {
+            botMsg.innerHTML = '<b>Bot:</b> Errore nell\'elaborazione dell\'allegato.';
+        }
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        canUpload = true;
+        fileInput.disabled = false;
+        uploadForm.querySelector('button[type="submit"]').disabled = false;
+    })
+    .catch(() => {
+        botMsg.innerHTML = '<b>Bot:</b> Errore di connessione al server.';
+        canUpload = true;
+        fileInput.disabled = false;
+        uploadForm.querySelector('button[type="submit"]').disabled = false;
+    });
+    fileInput.value = '';
+};
+
+clearBtn.onclick = function() {
+    messagesDiv.innerHTML = '';
+    appendMessage('Chat pulita! Puoi iniziare una nuova conversazione.', 'bot');
+    // Richiama il reset della sessione lato backend
+    fetch('http://localhost:5050/reset', { method: 'POST' });
+    // Sblocca subito l'invio
+    canSend = true;
+    userInput.disabled = false;
+    sendBtn.disabled = false;
+    canUpload = true;
+    fileInput.disabled = false;
+    uploadForm.querySelector('button[type="submit"]').disabled = false;
+    // Se c'è una richiesta in corso, blocca la ricezione
+    if (currentEvtSource && typeof currentEvtSource.close === 'function') {
+        try { currentEvtSource.close(); } catch(e) {}
+        currentEvtSource = null;
+    }
+};
+
+userInput.addEventListener('input', function() {
+    const text = userInput.value.trim();
+    sendBtn.disabled = !text;
+});
+
+fileInput.addEventListener('click', function(e) {
+    if (!canUpload) {
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+    }
+});
+fileInput.addEventListener('keydown', function(e) {
+    if (!canUpload) {
+        e.preventDefault();
+        e.stopPropagation();
+        return false;
+    }
+});
+</script>
+</body>
+</html>
